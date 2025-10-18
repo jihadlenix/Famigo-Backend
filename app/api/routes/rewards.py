@@ -5,6 +5,8 @@ from ...services.reward_service import create_reward, request_redemption, approv
 from ...services.family_service import ensure_member
 from ...models.family_member import MemberRole
 from ...models.user import User
+from app.models.reward import Reward
+
 from ..deps import get_db, get_current_user
 router = APIRouter()
 @router.post("/families/{family_id}/rewards", response_model=RewardOut)
