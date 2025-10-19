@@ -1,3 +1,5 @@
+from .base_class import Base  
+
 from ..models.user import User
 from ..models.family import Family
 from ..models.family_member import FamilyMember, MemberRole

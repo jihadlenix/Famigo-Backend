@@ -132,6 +132,10 @@ def update_task(
     if not (is_creator or is_parent):
         # only creator or any parent in the family can edit
         return None
+    
+    any_completed = any(a.is_completed for a in task.assignments)
+    if any_completed or task.status == TaskStatus.DONE:
+        raise ValueError("Task is locked after completion and cannot be edited.")
 
     if title is not None:
         task.title = title
@@ -149,10 +153,11 @@ def update_task(
 # --- NEW: list all tasks assigned to a user's memberships (across families) ---
 def list_tasks_for_user(db: Session, *, user_id: str) -> list[Task]:
     stmt = (
-        select(distinct(Task))
+        select(Task)
         .join(TaskAssignment, TaskAssignment.task_id == Task.id)
         .join(FamilyMember, FamilyMember.id == TaskAssignment.assignee_id)
         .where(FamilyMember.user_id == user_id)
+        .distinct()  # <-- distinct on the whole rowset
     )
     return db.execute(stmt).scalars().all()
 

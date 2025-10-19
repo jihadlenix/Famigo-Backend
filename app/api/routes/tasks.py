@@ -3,6 +3,11 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import Optional, List
 
+from sqlalchemy import select
+from ...models.task import Task, TaskAssignment
+from ...models.family_member import FamilyMember, MemberRole
+from ...models.family import Family
+
 from pydantic import BaseModel
 from ...schemas.task import TaskCreate, TaskOut
 from ...services.task_service import (
@@ -98,29 +103,63 @@ def create_family_task(
 )
 def assign(
     task_id: str,
-    assignee_member_id: str,
+    assignee_member_id: str,   # can be FamilyMember.id or User.id
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    caller = ensure_member(
-        db,
-        user_id=current.id,
-        family_id=None,
-        require_same_family_for_task_id=task_id,
-    )
-    if not caller:
-        raise HTTPException(403, "You are not a member of this family")
+    # 1) Load task and its family
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
 
-    is_self_assign = (caller.id == assignee_member_id)
-    if not is_self_assign and caller.role != MemberRole.PARENT:
-        raise HTTPException(403, "Only parents can assign tasks to other members")
+    family = db.get(Family, task.family_id)
+    if not family:
+        raise HTTPException(404, "Family not found")
 
+    # 2) Resolve caller (must be member or owner)
+    caller_member = db.execute(
+        select(FamilyMember).where(
+            FamilyMember.user_id == current.id,
+            FamilyMember.family_id == family.id,
+        )
+    ).scalar_one_or_none()
+    is_owner = (family.owner_id == current.id)
+    if not (caller_member or is_owner):
+        raise HTTPException(403, "You are not a member or owner of this family")
+
+    # 3) Resolve ASSIGNEE: accept FamilyMember.id OR User.id
+    assignee = db.get(FamilyMember, assignee_member_id)
+    if not assignee:
+        # maybe a user_id was provided – map it to the family member
+        assignee = db.execute(
+            select(FamilyMember).where(
+                FamilyMember.user_id == assignee_member_id,
+                FamilyMember.family_id == family.id,
+            )
+        ).scalar_one_or_none()
+
+    if not assignee:
+        raise HTTPException(404, "Assignee not found in this family")
+
+    # 4) Permission checks:
+    #    - owner can assign anyone
+    #    - parents can assign anyone
+    #    - members can only self-assign
+    is_self_assign = caller_member and (caller_member.id == assignee.id)
+
+    if not is_owner:
+        if not caller_member:
+            raise HTTPException(403, "No family membership found")
+        if not (is_self_assign or caller_member.role == MemberRole.PARENT):
+            raise HTTPException(403, "Only parents or the owner can assign tasks")
+
+    # 5) Do assignment (service already checks same-family & idempotency)
     try:
-        a = assign_task(db, task_id=task_id, assignee_id=assignee_member_id)
+        a = assign_task(db, task_id=task_id, assignee_id=assignee.id)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"assignment_id": a.id}
 
+    return {"assignment_id": a.id}
 
 # ------------------------------------------------------------------------
 # Complete a task
@@ -150,18 +189,37 @@ def complete(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    assignee = ensure_member(
-        db,
-        user_id=current.id,
-        family_id=None,
-        require_same_family_for_assignment_id=assignment_id,
-    )
-    if not assignee:
+    # 1) Load assignment and related task
+    assignment = db.get(TaskAssignment, assignment_id)
+    if not assignment:
+        raise HTTPException(404, "Assignment not found")
+
+    task = db.get(Task, assignment.task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+
+    # 2) Find the caller's member record in the SAME family as the task
+    caller_member = db.execute(
+        select(FamilyMember).where(
+            FamilyMember.user_id == current.id,
+            FamilyMember.family_id == task.family_id,
+        )
+    ).scalar_one_or_none()
+
+    if not caller_member:
         raise HTTPException(403, "You are not a member of this family")
 
-    a = complete_assignment(db, assignment_id=assignment_id, by_member_id=assignee.id)
+    # 3) Only the assignee can complete their own assignment
+    if assignment.assignee_id != caller_member.id:
+        raise HTTPException(403, "Only the assignee can complete this task")
+
+    # 4) Complete (this will also credit wallet immediately per your service)
+    a = complete_assignment(
+        db, assignment_id=assignment_id, by_member_id=caller_member.id
+    )
     if not a:
         raise HTTPException(400, "Cannot complete assignment")
+
     return {"ok": True}
 
 
@@ -183,7 +241,8 @@ def complete(
     - `title`  
     - `description`  
     - `deadline`  
-    - `points_value`  
+    - `points_value`
+    if task is done can't edit it  
 
     **Returns:**  
     Updated `TaskOut` object.
@@ -195,29 +254,36 @@ def edit_task(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    editor = ensure_member(
-        db,
-        user_id=current.id,
-        family_id=None,
-        require_same_family_for_task_id=task_id,
-    )
-    if not editor:
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+
+    editor_member = db.execute(
+        select(FamilyMember).where(
+            FamilyMember.user_id == current.id,
+            FamilyMember.family_id == task.family_id,
+        )
+    ).scalar_one_or_none()
+    if not editor_member:
         raise HTTPException(403, "You are not a member of this family")
 
-    t = update_task(
-        db,
-        task_id=task_id,
-        editor_member_id=editor.id,
-        title=payload.title,
-        description=payload.description,
-        deadline=payload.deadline,
-        points_value=payload.points_value,
-    )
+    try:
+        t = update_task(
+            db,
+            task_id=task.id,
+            editor_member_id=editor_member.id,
+            title=payload.title,
+            description=payload.description,
+            deadline=payload.deadline,
+            points_value=payload.points_value,
+        )
+    except ValueError as e:
+        # when locked after completion
+        raise HTTPException(status_code=400, detail=str(e))
+
     if not t:
         raise HTTPException(403, "You cannot edit this task")
     return t
-
-
 # ------------------------------------------------------------------------
 # Get all tasks assigned to the current user
 # ------------------------------------------------------------------------
