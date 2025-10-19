@@ -35,8 +35,20 @@ def token(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
 
 @router.post("/refresh", response_model=TokenOut)
 def refresh(refresh_token: str, db: Session = Depends(get_db)):
-    rt = db.query(RefreshToken).filter(RefreshToken.token==refresh_token, not RefreshToken.is_revoked).first()
-    if not rt or (rt.expires_at and rt.expires_at < utcnow()):
+    rt = db.query(RefreshToken).filter(
+        RefreshToken.token == refresh_token,
+        RefreshToken.is_revoked.is_(False)
+    ).first()
+    if not rt:
         raise HTTPException(401, "Invalid or expired refresh")
+
+    # normalize tz to avoid “offset-naive vs offset-aware”
+    now = datetime.now(timezone.utc)
+    if rt.expires_at:
+        exp = rt.expires_at
+        exp = exp.replace(tzinfo=timezone.utc) if exp.tzinfo is None else exp.astimezone(timezone.utc)
+        if exp < now:
+            raise HTTPException(401, "Invalid or expired refresh")
+
     access = create_access_token(rt.user_id)
     return TokenOut(access_token=access, refresh_token=refresh_token)
