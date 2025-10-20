@@ -15,7 +15,7 @@ famigo.db
 # IDE & editor configs
 .vscode/
 .idea/
-
+static
 # Logs
 *.log
 
