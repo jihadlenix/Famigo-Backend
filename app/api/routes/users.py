@@ -15,7 +15,7 @@ router = APIRouter()
 def _build_me_out(db: Session, user: User) -> MeOut:
     """
     Helper to build the MeOut response:
-    - user info (including wallet, bio, etc.)
+    - user info (including wallet, etc.)
     - families this user belongs to
     """
     # load all families for this user
@@ -43,7 +43,7 @@ def me(
     return _build_me_out(db, user)
 
 
-# ✅ Update user profile (username, full name, profile pic, bio)
+# ✅ Update user profile (username, full name, profile pic, age)
 @router.patch("/me", response_model=MeOut)
 def update_me(
     payload: UserUpdate,
@@ -56,8 +56,8 @@ def update_me(
         current.full_name = payload.full_name
     if payload.profile_pic is not None:
         current.profile_pic = payload.profile_pic
-    if getattr(payload, "bio", None) is not None:
-        current.bio = payload.bio
+    if payload.age is not None:
+        current.age = payload.age
 
     db.commit()
     db.refresh(current)

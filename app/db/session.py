@@ -14,8 +14,7 @@ engine = create_engine(
     future=True,
     connect_args=connect_args
 )
-with engine.connect() as conn:
-    print("✅ Connection OK")
+# Note: Connection test removed - database will be created on first use via Base.metadata.create_all()
 # Session factory
 SessionLocal = sessionmaker(
     bind=engine,

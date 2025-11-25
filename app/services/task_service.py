@@ -163,6 +163,5 @@ def list_tasks_for_user(db: Session, *, user_id: str) -> list[Task]:
     )
     return db.execute(stmt).scalars().all()
 
-# --- NEW: list all tasks in a family (visible to any member) ---
 def list_tasks_for_family(db: Session, *, family_id: str) -> list[Task]:
     return db.execute(select(Task).where(Task.family_id == family_id)).scalars().all()

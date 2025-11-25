@@ -18,13 +18,12 @@ class UserOut(ORMModel):
     age: int                                # Age in years (required)
     is_active: bool
     wallet: Optional[WalletOut] = None     # existing wallet field
-    bio: Optional[str] = None
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
     full_name: Optional[str] = None
-    profile_pic: Optional[str] = None      
-    bio: Optional[str] = None
+    profile_pic: Optional[str] = None
+    age: Optional[int] = None              # Age in years
 
 class MeOut(UserOut):
     families: List[FamilyOut] = []   # 👈 NEW FIELD
