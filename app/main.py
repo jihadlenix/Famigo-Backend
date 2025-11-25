@@ -10,7 +10,6 @@ app = FastAPI(title="Famigo API", version="0.2.0")
 def on_startup():
     Base.metadata.create_all(bind=engine)
 
-# ✅ Register routes
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(families.router, prefix="/families", tags=["Families"])

@@ -21,6 +21,7 @@ class Task(Base):
     deadline: Mapped["DateTime | None"] = mapped_column(DateTime(timezone=True))
     status: Mapped[TaskStatus] = mapped_column(default=TaskStatus.OPEN, index=True)
     points_value: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)  # AI-classified category
     created_by_member_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("familymember.id", ondelete="SET NULL"))
     created_at: Mapped["DateTime"] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped["DateTime"] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)

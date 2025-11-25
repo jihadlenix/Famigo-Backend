@@ -1,14 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ...schemas.reward import RewardCreate, RewardOut, RedemptionOut
-from ...services.reward_service import create_reward, request_redemption, approve_redemption, deliver_redemption
+from ...services.reward_service import create_reward, request_redemption, approve_redemption, deliver_redemption, list_family_rewards
 from ...services.family_service import ensure_member
 from ...models.family_member import MemberRole
 from ...models.user import User
 from app.models.reward import Reward
 
 from ..deps import get_db, get_current_user
+from typing import List
+
 router = APIRouter()
+
+@router.get("/families/{family_id}/rewards", response_model=List[RewardOut])
+def get_family_rewards(family_id: str, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    member = ensure_member(db, user_id=current.id, family_id=family_id)
+    if not member:
+        raise HTTPException(403, "You are not a member of this family")
+    rewards = list_family_rewards(db, family_id=family_id)
+    return rewards
+
 @router.post("/families/{family_id}/rewards", response_model=RewardOut)
 def create_family_reward(family_id: str, payload: RewardCreate, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     member = ensure_member(db, user_id=current.id, family_id=family_id)

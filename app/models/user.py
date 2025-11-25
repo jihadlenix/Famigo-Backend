@@ -20,6 +20,8 @@ class User(Base):
     full_name: Mapped[Optional[str]] = mapped_column(String(128))
     profile_pic: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)  # ✅ added
     bio = Column(Text, nullable=True)
+    age: Mapped[int] = mapped_column(Integer, nullable=False)  # Age in years (required)
+
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped["DateTime"] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
