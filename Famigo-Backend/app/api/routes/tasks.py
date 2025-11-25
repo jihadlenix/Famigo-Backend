@@ -33,7 +33,8 @@ class TaskUpdate(BaseModel):
     deadline: Optional[datetime] = None
     points_value: Optional[int] = None
 
-
+class AssignPayload(BaseModel):
+    username: str
 # ------------------------------------------------------------------------
 #  Create a new task
 # ------------------------------------------------------------------------
@@ -83,68 +84,67 @@ def create_family_task(
 #  Assign a task
 # ------------------------------------------------------------------------
 @router.post(
-    "/tasks/{task_id}/assign/{assignee_member_id}",
+    "/tasks/{task_id}/assign",
     response_model=dict,
-    summary="Assign Task",
+    summary="Assign Task (by username)",
     description="""
-    Assign a task to a family member.
+    Assign a task to a family member using their username.
 
-    **Who can use it:**  
-    - Parents can assign tasks to any child.  
-    - Members can assign tasks to themselves (self-assign).
-
-    **Path Parameters:**  
-    - `task_id`: ID of the task  
-    - `assignee_member_id`: Family member who will perform the task  
-
-    **Returns:**  
-    The new assignment ID (`assignment_id`).
+    Body:
+    - username: the username of the user who should receive the task
     """,
 )
 def assign(
     task_id: str,
-    assignee_member_id: str,   # can be FamilyMember.id or User.id
+    payload: AssignPayload,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    # 1) Load task and its family
+    # 1) Load task
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
 
+    # 2) Load family
     family = db.get(Family, task.family_id)
     if not family:
         raise HTTPException(404, "Family not found")
 
-    # 2) Resolve caller (must be member or owner)
+    # 3) Determine caller (must be a member or family owner)
     caller_member = db.execute(
         select(FamilyMember).where(
             FamilyMember.user_id == current.id,
             FamilyMember.family_id == family.id,
         )
     ).scalar_one_or_none()
+
     is_owner = (family.owner_id == current.id)
+
     if not (caller_member or is_owner):
-        raise HTTPException(403, "You are not a member or owner of this family")
+        raise HTTPException(403, "You are not a member or the owner of this family")
 
-    # 3) Resolve ASSIGNEE: accept FamilyMember.id OR User.id
-    assignee = db.get(FamilyMember, assignee_member_id)
+    # 4) Resolve assignee BY USERNAME
+    username = payload.username.strip().lower()
+
+    user = db.execute(
+        select(User).where(User.username == username)
+    ).scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(404, "No user found with that username")
+
+    # Find the family member record for that user
+    assignee = db.execute(
+        select(FamilyMember).where(
+            FamilyMember.user_id == user.id,
+            FamilyMember.family_id == family.id,
+        )
+    ).scalar_one_or_none()
+
     if not assignee:
-        # maybe a user_id was provided – map it to the family member
-        assignee = db.execute(
-            select(FamilyMember).where(
-                FamilyMember.user_id == assignee_member_id,
-                FamilyMember.family_id == family.id,
-            )
-        ).scalar_one_or_none()
+        raise HTTPException(404, "User is not a member of this family")
 
-    if not assignee:
-        raise HTTPException(404, "Assignee not found in this family")
-
-    # 4) Permission checks:
-    #    - owner can assign anyone
-    #    - parents can assign anyone
-    #    - members can only self-assign
+    # 5) Permissions
     is_self_assign = caller_member and (caller_member.id == assignee.id)
 
     if not is_owner:
@@ -153,7 +153,7 @@ def assign(
         if not (is_self_assign or caller_member.role == MemberRole.PARENT):
             raise HTTPException(403, "Only parents or the owner can assign tasks")
 
-    # 5) Do assignment (service already checks same-family & idempotency)
+    # 6) Perform assignment
     try:
         a = assign_task(db, task_id=task_id, assignee_id=assignee.id)
     except ValueError as e:
@@ -161,67 +161,59 @@ def assign(
 
     return {"assignment_id": a.id}
 
+
 # ------------------------------------------------------------------------
 # Complete a task
 # ------------------------------------------------------------------------
 @router.post(
-    "/assignments/{assignment_id}/complete",
+    "/tasks/{task_id}/complete",
     response_model=dict,
-    summary="Complete Task",
-    description="""
-    Mark a task assignment as completed by the assignee.
-
-    When completed, the user's wallet is automatically **credited**
-    with the task's reward points.
-
-    **Who can use it:**  
-    - Only the assignee of the task.
-
-    **Path Parameters:**  
-    - `assignment_id`: The assignment to mark as complete  
-
-    **Returns:**  
-    `{ "ok": true }` on success.
-    """,
+    summary="Complete Task (by task ID)",
+    description="Complete a task using its ID. Automatically credits the user's wallet.",
 )
-def complete(
-    assignment_id: str,
+def complete_task(
+    task_id: str,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    # 1) Load assignment and related task
-    assignment = db.get(TaskAssignment, assignment_id)
-    if not assignment:
-        raise HTTPException(404, "Assignment not found")
-
-    task = db.get(Task, assignment.task_id)
+    # 1) Load task
+    task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
 
-    # 2) Find the caller's member record in the SAME family as the task
-    caller_member = db.execute(
+    # 2) Find current user's family member record
+    member = db.execute(
         select(FamilyMember).where(
             FamilyMember.user_id == current.id,
             FamilyMember.family_id == task.family_id,
         )
     ).scalar_one_or_none()
 
-    if not caller_member:
+    if not member:
         raise HTTPException(403, "You are not a member of this family")
 
-    # 3) Only the assignee can complete their own assignment
-    if assignment.assignee_id != caller_member.id:
-        raise HTTPException(403, "Only the assignee can complete this task")
+    # 3) Find the assignment for THIS user & THIS task
+    assignment = db.execute(
+        select(TaskAssignment).where(
+            TaskAssignment.task_id == task_id,
+            TaskAssignment.assignee_id == member.id
+        )
+    ).scalar_one_or_none()
 
-    # 4) Complete (this will also credit wallet immediately per your service)
-    a = complete_assignment(
-        db, assignment_id=assignment_id, by_member_id=caller_member.id
-    )
-    if not a:
-        raise HTTPException(400, "Cannot complete assignment")
+    if not assignment:
+        raise HTTPException(404, "No assignment found for this user on this task")
+
+    # 4) Complete assignment through service (also credits wallet)
+    try:
+        complete_assignment(
+            db,
+            assignment_id=assignment.id,
+            by_member_id=member.id
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
     return {"ok": True}
-
 
 # ------------------------------------------------------------------------
 #  Edit an existing task
@@ -339,3 +331,25 @@ def family_tasks(
     if not member:
         raise HTTPException(403, "You are not a member of this family")
     return list_tasks_for_family(db, family_id=family_id)
+@router.get(
+    "/me/points",
+    response_model=dict,
+    summary="Get My Total Points",
+    description="Returns the total wallet balance of the current user across all families.",
+)
+def my_points(
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+):
+    # Find all families where the user is a member
+    members = db.execute(
+        select(FamilyMember).where(FamilyMember.user_id == current.id)
+    ).scalars().all()
+
+    total = 0
+
+    for m in members:
+        if m.wallet:
+            total += m.wallet.balance
+
+    return {"total_points": total}
