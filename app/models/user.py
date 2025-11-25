@@ -28,6 +28,7 @@ class User(Base):
     memberships: Mapped[list["FamilyMember"]] = relationship(back_populates="user", cascade="all,delete-orphan")
     owned_families: Mapped[list["Family"]] = relationship(back_populates="owner")
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(back_populates="user", cascade="all,delete-orphan")
+    cartoon_avatar: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
 
     wallet: Mapped["Wallet"] = relationship(
         "Wallet",
