@@ -1,16 +1,37 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, joinedload
-from ...schemas.user import UserOut, UserUpdate
+
+from typing import List
+
+from ...schemas.user import UserOut, UserUpdate, MeOut
+from ...schemas.family import FamilyOut
 from ...models.user import User
 from ..deps import get_db, get_current_user
+from ...services.family_service import list_user_families
 
 router = APIRouter()
 
-# ✅ Get current user + wallet
-@router.get("/me", response_model=UserOut)
+
+def _build_me_out(db: Session, user: User) -> MeOut:
+    """
+    Helper to build the MeOut response:
+    - user info (including wallet, bio, etc.)
+    - families this user belongs to
+    """
+    # load all families for this user
+    families = list_user_families(db, user_id=user.id)
+
+    user_out = UserOut.from_orm(user)
+    families_out: List[FamilyOut] = [FamilyOut.from_orm(f) for f in families]
+
+    return MeOut(**user_out.dict(), families=families_out)
+
+
+# ✅ Get current user + wallet + families
+@router.get("/me", response_model=MeOut)
 def me(
     db: Session = Depends(get_db),
-    current: User = Depends(get_current_user)
+    current: User = Depends(get_current_user),
 ):
     # Force load wallet relationship
     user = (
@@ -19,23 +40,25 @@ def me(
         .filter(User.id == current.id)
         .first()
     )
-    return user
+    return _build_me_out(db, user)
 
 
-# ✅ Update user profile (username, full name, profile pic)
-@router.patch("/me", response_model=UserOut)
+# ✅ Update user profile (username, full name, profile pic, bio)
+@router.patch("/me", response_model=MeOut)
 def update_me(
     payload: UserUpdate,
     db: Session = Depends(get_db),
-    current: User = Depends(get_current_user)
+    current: User = Depends(get_current_user),
 ):
     if payload.username is not None:
         current.username = payload.username
     if payload.full_name is not None:
         current.full_name = payload.full_name
-    if payload.profile_pic is not None:          # 👈 added line
+    if payload.profile_pic is not None:
         current.profile_pic = payload.profile_pic
+    if getattr(payload, "bio", None) is not None:
+        current.bio = payload.bio
 
     db.commit()
     db.refresh(current)
-    return current
+    return _build_me_out(db, current)

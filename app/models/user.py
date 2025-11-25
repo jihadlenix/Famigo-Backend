@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING, Optional
-from sqlalchemy import String, Boolean, DateTime
+from sqlalchemy import Column, String, Boolean, DateTime, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid import uuid4
 from ..db.base_class import Base
@@ -19,7 +19,7 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True)
     full_name: Mapped[Optional[str]] = mapped_column(String(128))
     profile_pic: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)  # ✅ added
-
+    bio = Column(Text, nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped["DateTime"] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
