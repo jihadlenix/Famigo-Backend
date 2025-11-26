@@ -33,8 +33,7 @@ class TaskUpdate(BaseModel):
     deadline: Optional[datetime] = None
     points_value: Optional[int] = None
 
-class AssignPayload(BaseModel):
-    username: str
+
 # ------------------------------------------------------------------------
 #  Create a new task
 # ------------------------------------------------------------------------
@@ -84,19 +83,27 @@ def create_family_task(
 #  Assign a task
 # ------------------------------------------------------------------------
 @router.post(
-    "/tasks/{task_id}/assign",
+    "/tasks/{task_id}/assign/{assignee_member_id}",
     response_model=dict,
-    summary="Assign Task (by username)",
+    summary="Assign Task",
     description="""
-    Assign a task to a family member using their username.
+    Assign a task to a family member.
 
-    Body:
-    - username: the username of the user who should receive the task
+    **Who can use it:**  
+    - Parents can assign tasks to any child.  
+    - Members can assign tasks to themselves (self-assign).
+
+    **Path Parameters:**  
+    - `task_id`: ID of the task  
+    - `assignee_member_id`: Family member who will perform the task  
+
+    **Returns:**  
+    The new assignment ID (`assignment_id`).
     """,
 )
 def assign(
     task_id: str,
-    payload: AssignPayload,
+    assignee_member_id: str,   # can be FamilyMember.id or User.id
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
@@ -117,11 +124,9 @@ def assign(
             FamilyMember.family_id == family.id,
         )
     ).scalar_one_or_none()
-
     is_owner = (family.owner_id == current.id)
-
     if not (caller_member or is_owner):
-        raise HTTPException(403, "You are not a member or the owner of this family")
+        raise HTTPException(403, "You are not a member or owner of this family")
 
     # 4) Resolve assignee BY USERNAME
     username = payload.username.strip().lower()
@@ -165,54 +170,63 @@ def assign(
 # Complete a task
 # ------------------------------------------------------------------------
 @router.post(
-    "/tasks/{task_id}/complete",
+    "/assignments/{assignment_id}/complete",
     response_model=dict,
-    summary="Complete Task (by task ID)",
-    description="Complete a task using its ID. Automatically credits the user's wallet.",
+    summary="Complete Task",
+    description="""
+    Mark a task assignment as completed by the assignee.
+
+    When completed, the user's wallet is automatically **credited**
+    with the task's reward points.
+
+    **Who can use it:**  
+    - Only the assignee of the task.
+
+    **Path Parameters:**  
+    - `assignment_id`: The assignment to mark as complete  
+
+    **Returns:**  
+    `{ "ok": true }` on success.
+    """,
 )
-def complete_task(
-    task_id: str,
+def complete(
+    assignment_id: str,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    # 1) Load task
-    task = db.get(Task, task_id)
+    # 1) Load assignment and related task
+    assignment = db.get(TaskAssignment, assignment_id)
+    if not assignment:
+        raise HTTPException(404, "Assignment not found")
+
+    task = db.get(Task, assignment.task_id)
     if not task:
         raise HTTPException(404, "Task not found")
 
-    # 2) Find current user's family member record
-    member = db.execute(
+    # 2) Find the caller's member record in the SAME family as the task
+    caller_member = db.execute(
         select(FamilyMember).where(
             FamilyMember.user_id == current.id,
             FamilyMember.family_id == task.family_id,
         )
     ).scalar_one_or_none()
 
-    if not member:
+    if not caller_member:
         raise HTTPException(403, "You are not a member of this family")
 
-    # 3) Find the assignment for THIS user & THIS task
-    assignment = db.execute(
-        select(TaskAssignment).where(
-            TaskAssignment.task_id == task_id,
-            TaskAssignment.assignee_id == member.id
-        )
-    ).scalar_one_or_none()
+    # 3) Only the assignee can complete their own assignment
+    if assignment.assignee_id != caller_member.id:
+        raise HTTPException(403, "Only the assignee can complete this task")
 
-    if not assignment:
-        raise HTTPException(404, "No assignment found for this user on this task")
-
-    # 4) Complete assignment through service (also credits wallet)
-    try:
-        complete_assignment(
-            db,
-            assignment_id=assignment.id,
-            by_member_id=member.id
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    # 4) Complete (this will also credit wallet immediately per your service)
+    a = complete_assignment(
+        db, assignment_id=assignment_id, by_member_id=caller_member.id
+    )
+    if not a:
+        raise HTTPException(400, "Cannot complete assignment")
 
     return {"ok": True}
+
 
 # ------------------------------------------------------------------------
 #  Edit an existing task
