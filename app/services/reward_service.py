@@ -5,6 +5,9 @@ from ..models.points import Wallet, Transaction, TransactionType
 from ..models import utcnow
 
 
+def list_family_rewards(db: Session, *, family_id: str) -> list[Reward]:
+    return list(db.execute(select(Reward).where(Reward.family_id == family_id, Reward.is_active == True)).scalars())
+
 def create_reward(db: Session, *, family_id: str, title: str, description: str | None, cost_points: int) -> Reward:
     r = Reward(family_id=family_id, title=title, description=description, cost_points=cost_points)
     db.add(r)

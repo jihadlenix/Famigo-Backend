@@ -21,6 +21,7 @@ from ...services.task_service import (
 )
 from ...services.family_service import ensure_member
 from ..deps import get_db, get_current_user
+from ...services.ai_service import classify_task, suggest_assignments
 
 router = APIRouter()
 
@@ -31,14 +32,17 @@ class TaskUpdate(BaseModel):
     deadline: Optional[datetime] = None
     points_value: Optional[int] = None
 
+class TaskClassifyRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+
 
 class AssignTaskBody(BaseModel):
     member_id: str
 
 
-# ------------------------------------------------------------------------
 #  Create a new task in a family
-# ------------------------------------------------------------------------
+
 @router.post(
     "/families/{family_id}/tasks",
     response_model=TaskOut,
@@ -53,6 +57,9 @@ def create_family_task(
     if not member:
         raise HTTPException(403, "You are not a member of this family")
 
+    # Classify task using AI
+    classification = classify_task(payload.title, payload.description)
+    
     t = create_task(
         db,
         family_id=family_id,
@@ -61,6 +68,7 @@ def create_family_task(
         deadline=payload.deadline,
         points_value=payload.points_value,
         created_by_member_id=member.id,
+        category=classification.get("category"),  # Add category from AI classification
     )
     return t
 
@@ -236,6 +244,102 @@ def family_tasks(
     if not member:
         raise HTTPException(403, "You are not a member of this family")
     return list_tasks_for_family(db, family_id=family_id)
+
+
+# ------------------------------------------------------------------------
+# Classify a task (AI endpoint)
+# ------------------------------------------------------------------------
+@router.post(
+    "/classify",
+    summary="Classify Task",
+    description="""
+    Classify a task into categories (chores, homework, creative, physical, social, other)
+    using AI. This helps suggest age-appropriate assignments.
+    
+    **Who can use it:**  
+    Any authenticated user.
+    
+    **Body Parameters:**  
+    - `title`: Task title (required)
+    - `description`: Optional task description
+    
+    **Returns:**  
+    Classification result with category, confidence, and age suggestions.
+    """,
+)
+def classify_task_endpoint(
+    payload: TaskClassifyRequest,
+    current: User = Depends(get_current_user),
+):
+    result = classify_task(payload.title, payload.description)
+    return result
+
+
+# ------------------------------------------------------------------------
+# Get assignment suggestions for a task
+# ------------------------------------------------------------------------
+@router.get(
+    "/{task_id}/suggestions",
+    summary="Get Assignment Suggestions",
+    description="""
+    Get AI-powered suggestions for which family members are best suited
+    for a task based on category and age appropriateness.
+    
+    **Who can use it:**  
+    Any member of the family that owns the task.
+    
+    **Path Parameter:**  
+    - `task_id`: ID of the task
+    
+    **Returns:**  
+    List of suggested family members sorted by suitability score.
+    """,
+)
+def get_task_suggestions(
+    task_id: str,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+):
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    
+    # Verify user is a member of the family
+    member = ensure_member(db, user_id=current.id, family_id=task.family_id)
+    if not member:
+        raise HTTPException(403, "You are not a member of this family")
+    
+    # Get all family members
+    family_members = db.execute(
+        select(FamilyMember).where(FamilyMember.family_id == task.family_id)
+    ).scalars().all()
+    
+    # Convert to dict format for AI service
+    members_data = []
+    for fm in family_members:
+        members_data.append({
+            "id": fm.id,
+            "role": fm.role.value if hasattr(fm.role, 'value') else str(fm.role),
+            "display_name": fm.display_name,
+            "full_name": fm.user.full_name if fm.user else None,
+            "age": fm.user.age if fm.user else None,  # Get age from User model
+        })
+    
+    # Get category from task (or classify if not set)
+    category = task.category
+    if not category:
+        classification = classify_task(task.title, task.description)
+        category = classification.get("category", "other")
+    
+    # Get suggestions
+    suggestions = suggest_assignments(category, members_data)
+    
+    return {
+        "task_id": task_id,
+        "task_title": task.title,
+        "category": category,
+        "suggestions": suggestions
+    }
 
 
 # ------------------------------------------------------------------------

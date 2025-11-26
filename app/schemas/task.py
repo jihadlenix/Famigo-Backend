@@ -14,3 +14,4 @@ class TaskOut(ORMModel):
     deadline: datetime | None = None
     status: str
     points_value: int
+    category: str | None = None

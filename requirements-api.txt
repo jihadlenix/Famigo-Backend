@@ -1,12 +1,4 @@
-torch
-torchvision
-gradio
-diffusers
-opencv-python
-numpy
-pillow
-requests
-huggingface-hub
+# FastAPI Backend Dependencies (Core)
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.8.2
@@ -19,4 +11,4 @@ PyJWT==2.9.0
 aiosqlite==0.20.0
 python-multipart==0.0.9
 bcrypt==4.2.0
-transformers==4.40.0
+

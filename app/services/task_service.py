@@ -26,7 +26,8 @@ def create_task(
     description: str | None,
     deadline,
     points_value: int,
-    created_by_member_id: str | None
+    created_by_member_id: str | None,
+    category: str | None = None
 ) -> Task:
     t = Task(
         family_id=family_id,
@@ -35,6 +36,7 @@ def create_task(
         deadline=deadline,
         points_value=points_value,
         created_by_member_id=created_by_member_id,
+        category=category,
     )
     db.add(t)
     db.commit()

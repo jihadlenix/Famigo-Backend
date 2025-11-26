@@ -17,6 +17,7 @@ router = APIRouter()
 @router.post("/", response_model=FamilyOut)
 def create(payload: FamilyCreate, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     fam = create_family(db, owner_user_id=current.id, name=payload.name)
+    print(f"Family created: {fam.id}")
     return fam
 
 @router.get("/my", response_model=list[FamilyOut])
