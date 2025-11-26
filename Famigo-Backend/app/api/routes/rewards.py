@@ -28,6 +28,7 @@ def redeem_now(
         raise HTTPException(404, "Reward not found")
 
     member = ensure_member(db, user_id=current.id, family_id=reward.family_id)
+    
     if not member:
         raise HTTPException(403, "You are not a member of this family")
 
