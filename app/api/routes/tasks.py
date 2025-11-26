@@ -1,14 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import Optional, List
 
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from ...models.task import Task, TaskAssignment
 from ...models.family_member import FamilyMember, MemberRole
 from ...models.family import Family
-
-from pydantic import BaseModel
+from ...models.user import User
 from ...schemas.task import TaskCreate, TaskOut
 from ...services.task_service import (
     create_task,
@@ -19,14 +20,11 @@ from ...services.task_service import (
     list_tasks_for_family,
 )
 from ...services.family_service import ensure_member
-from ...models.family_member import MemberRole
-from ...models.user import User
 from ..deps import get_db, get_current_user
 
 router = APIRouter()
 
 
-# Inline update schema (to keep schemas package untouched)
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
@@ -34,28 +32,16 @@ class TaskUpdate(BaseModel):
     points_value: Optional[int] = None
 
 
+class AssignTaskBody(BaseModel):
+    member_id: str
+
+
 # ------------------------------------------------------------------------
-#  Create a new task
+#  Create a new task in a family
 # ------------------------------------------------------------------------
 @router.post(
     "/families/{family_id}/tasks",
     response_model=TaskOut,
-    summary="Create Family Task",
-    description="""
-    Create a new task within a specific family.
-
-    **Who can use it:**  
-    Any authenticated family member.
-
-    **Body Parameters:**  
-    - `title`: Task title  
-    - `description` (optional): Task details  
-    - `deadline` (optional): Due date  
-    - `points_value`: Reward points given when completed  
-
-    **Returns:**  
-    The newly created `TaskOut` object.
-    """,
 )
 def create_family_task(
     family_id: str,
@@ -80,130 +66,74 @@ def create_family_task(
 
 
 # ------------------------------------------------------------------------
-#  Assign a task
+#  Assign a task to a family member (by member_id)
 # ------------------------------------------------------------------------
 @router.post(
-    "/tasks/{task_id}/assign/{assignee_member_id}",
+    "/tasks/{task_id}/assign",
     response_model=dict,
-    summary="Assign Task",
-    description="""
-    Assign a task to a family member.
-
-    **Who can use it:**  
-    - Parents can assign tasks to any child.  
-    - Members can assign tasks to themselves (self-assign).
-
-    **Path Parameters:**  
-    - `task_id`: ID of the task  
-    - `assignee_member_id`: Family member who will perform the task  
-
-    **Returns:**  
-    The new assignment ID (`assignment_id`).
-    """,
 )
 def assign(
     task_id: str,
-    assignee_member_id: str,   # can be FamilyMember.id or User.id
+    body: AssignTaskBody,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    # 1) Load the task
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
 
-    # 2) Load the family
     family = db.get(Family, task.family_id)
     if not family:
         raise HTTPException(404, "Family not found")
 
-    # 3) Determine who is calling the endpoint
     caller_member = db.execute(
         select(FamilyMember).where(
             FamilyMember.user_id == current.id,
             FamilyMember.family_id == family.id,
         )
     ).scalar_one_or_none()
-    is_owner = (family.owner_id == current.id)
+    is_owner = family.owner_id == current.id
+
     if not (caller_member or is_owner):
         raise HTTPException(403, "You are not a member or owner of this family")
 
-    # 4) Resolve assignee BY USERNAME
-    username = payload.username.strip().lower()
+    assignee = db.get(FamilyMember, body.member_id)
+    if not assignee or assignee.family_id != family.id:
+        raise HTTPException(404, "Assignee not found in this family")
 
-    user = db.execute(
-        select(User).where(User.username == username)
-    ).scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(404, "No user found with that username")
-
-    # 5) Find the family member record for that user
-    assignee = db.execute(
-        select(FamilyMember).where(
-            FamilyMember.user_id == user.id,
-            FamilyMember.family_id == family.id,
-        )
-    ).scalar_one_or_none()
-
-    if not assignee:
-        raise HTTPException(404, "This user is not a member of this family")
-
-    # 6) Permission logic
-    is_self_assign = caller_member and (caller_member.id == assignee.id)
+    is_self_assign = caller_member and caller_member.id == assignee.id
 
     if not is_owner:
         if not caller_member:
             raise HTTPException(403, "No family membership found")
 
         if not (is_self_assign or caller_member.role == MemberRole.PARENT):
-            raise HTTPException(403, "Only parents or the owner can assign tasks")
+            raise HTTPException(403, "Only parents, owner, or self-assign can assign tasks")
 
-    # 7) Perform assignment
     try:
         a = assign_task(db, task_id=task_id, assignee_id=assignee.id)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
     return {"assignment_id": a.id}
+
+
 # ------------------------------------------------------------------------
-# Complete a task
+# Complete a task for the current user
 # ------------------------------------------------------------------------
 @router.post(
-    "/assignments/{assignment_id}/complete",
+    "/tasks/{task_id}/complete",
     response_model=dict,
-    summary="Complete Task",
-    description="""
-    Mark a task assignment as completed by the assignee.
-
-    When completed, the user's wallet is automatically **credited**
-    with the task's reward points.
-
-    **Who can use it:**  
-    - Only the assignee of the task.
-
-    **Path Parameters:**  
-    - `assignment_id`: The assignment to mark as complete  
-
-    **Returns:**  
-    `{ "ok": true }` on success.
-    """,
 )
-def complete(
-    assignment_id: str,
+def complete_for_current_user(
+    task_id: str,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    # 1) Load assignment and related task
-    assignment = db.get(TaskAssignment, assignment_id)
-    if not assignment:
-        raise HTTPException(404, "Assignment not found")
-
-    task = db.get(Task, assignment.task_id)
+    task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
 
-    # 2) Find the caller's member record in the SAME family as the task
     caller_member = db.execute(
         select(FamilyMember).where(
             FamilyMember.user_id == current.id,
@@ -214,14 +144,18 @@ def complete(
     if not caller_member:
         raise HTTPException(403, "You are not a member of this family")
 
-    # 3) Only the assignee can complete their own assignment
-    if assignment.assignee_id != caller_member.id:
-        raise HTTPException(403, "Only the assignee can complete this task")
+    assignment = db.execute(
+        select(TaskAssignment).where(
+            TaskAssignment.task_id == task.id,
+            TaskAssignment.assignee_id == caller_member.id,
+            TaskAssignment.completed_at.is_(None),
+        )
+    ).scalar_one_or_none()
 
-    # 4) Complete (this will also credit wallet immediately per your service)
-    a = complete_assignment(
-        db, assignment_id=assignment_id, by_member_id=caller_member.id
-    )
+    if not assignment:
+        raise HTTPException(404, "No active assignment for you on this task")
+
+    a = complete_assignment(db, assignment_id=assignment.id, by_member_id=caller_member.id)
     if not a:
         raise HTTPException(400, "Cannot complete assignment")
 
@@ -229,29 +163,11 @@ def complete(
 
 
 # ------------------------------------------------------------------------
-#  Edit an existing task
+# Edit an existing task
 # ------------------------------------------------------------------------
 @router.patch(
     "/tasks/{task_id}",
     response_model=TaskOut,
-    summary="Edit Task",
-    description="""
-    Update details of an existing task.
-
-    **Who can use it:**  
-    - The task creator  
-    - Any parent in the family  
-
-    **Editable Fields:**  
-    - `title`  
-    - `description`  
-    - `deadline`  
-    - `points_value`
-    if task is done can't edit it  
-
-    **Returns:**  
-    Updated `TaskOut` object.
-    """,
 )
 def edit_task(
     task_id: str,
@@ -283,57 +199,33 @@ def edit_task(
             points_value=payload.points_value,
         )
     except ValueError as e:
-        # when locked after completion
         raise HTTPException(status_code=400, detail=str(e))
 
     if not t:
         raise HTTPException(403, "You cannot edit this task")
     return t
+
+
 # ------------------------------------------------------------------------
 # Get all tasks assigned to the current user
 # ------------------------------------------------------------------------
 @router.get(
     "/me/tasks",
     response_model=List[TaskOut],
-    summary="Get My Tasks",
-    description="""
-    Retrieve all tasks assigned to the currently logged-in user,
-    across all families.
-
-    **Who can use it:**  
-    - Any authenticated user.
-
-    **Returns:**  
-    List of `TaskOut` objects for all tasks assigned to this user.
-    """,
 )
 def my_tasks(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    tasks = list_tasks_for_user(db, user_id=current.id)
-    return tasks
+    return list_tasks_for_user(db, user_id=current.id)
 
 
 # ------------------------------------------------------------------------
-# Get all tasks in a family
+# Get all tasks for a family
 # ------------------------------------------------------------------------
 @router.get(
     "/families/{family_id}/tasks",
     response_model=List[TaskOut],
-    summary="Get Family Tasks",
-    description="""
-    Retrieve all tasks that belong to a specific family.
-
-    **Who can use it:**  
-    Any member of the family.
-
-    **Path Parameter:**  
-    - `family_id`: The ID of the family  
-
-    **Returns:**  
-    List of `TaskOut` objects containing all tasks in the family.
-    """,
 )
 def family_tasks(
     family_id: str,
@@ -344,46 +236,24 @@ def family_tasks(
     if not member:
         raise HTTPException(403, "You are not a member of this family")
     return list_tasks_for_family(db, family_id=family_id)
+
+
+# ------------------------------------------------------------------------
+# Get total points of current user
+# ------------------------------------------------------------------------
 @router.get(
     "/me/points",
     response_model=dict,
-    summary="Get My Total Points",
-    description="Returns the total wallet balance of the current user across all families.",
 )
 def my_points(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    # Find all families where the user is a member
     members = db.execute(
         select(FamilyMember).where(FamilyMember.user_id == current.id)
     ).scalars().all()
 
     total = 0
-
-    for m in members:
-        if m.wallet:
-            total += m.wallet.balance
-
-    return {"total_points": total}
-
-@router.get(
-    "/me/points",
-    response_model=dict,
-    summary="Get My Total Points",
-    description="Returns the total wallet balance of the current user across all families.",
-)
-def my_points(
-    db: Session = Depends(get_db),
-    current: User = Depends(get_current_user),
-):
-    # Find all families where the user is a member
-    members = db.execute(
-        select(FamilyMember).where(FamilyMember.user_id == current.id)
-    ).scalars().all()
-
-    total = 0
-
     for m in members:
         if m.wallet:
             total += m.wallet.balance
