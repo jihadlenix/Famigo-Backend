@@ -17,8 +17,12 @@ def create_family_reward(family_id: str, payload: RewardCreate, db: Session = De
     r = create_reward(db, family_id=family_id, title=payload.title, description=payload.description, cost_points=payload.cost_points)
     return r
 
-@router.post("/rewards/{reward_id}/redeem", response_model=RedemptionOut)
-def redeem(reward_id: str, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+@router.post("/rewards/{reward_id}/redeem")
+def redeem_now(
+    reward_id: str,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user)
+):
     reward = db.get(Reward, reward_id)
     if not reward:
         raise HTTPException(404, "Reward not found")
@@ -27,11 +31,33 @@ def redeem(reward_id: str, db: Session = Depends(get_db), current: User = Depend
     if not member:
         raise HTTPException(403, "You are not a member of this family")
 
-    red = request_redemption(db, reward_id=reward_id, request_by_member_id=member.id)
-    if not red:
-        raise HTTPException(400, "Cannot request redemption")
+    # Get wallet of this member
+    wallet = db.query(Wallet).filter(Wallet.member_id == member.id).first()
+    if not wallet:
+        raise HTTPException(404, "Wallet not found")
 
-    return red
+    # Check points
+    if wallet.points < reward.cost_points:
+        raise HTTPException(400, "Not enough points")
+
+    # Deduct points
+    wallet.points -= reward.cost_points
+
+    # Create redemption as final state
+    red = Redemption(
+        reward_id=reward.id,
+        requested_by_member_id=member.id,
+        approved_by_member_id=member.id,  # auto approve
+        status=RedemptionStatus.REDEEMED,
+        redeemed_at=datetime.now(timezone.utc)
+    )
+
+    db.add(red)
+    db.commit()
+    db.refresh(red)
+
+    return {"success": True, "remaining_points": wallet.points}
+
 
 
 @router.post("/redemptions/{redemption_id}/approve", response_model=RedemptionOut)
@@ -47,3 +73,16 @@ def deliver(redemption_id: str, db: Session = Depends(get_db), current: User = D
     if not red: 
         raise HTTPException(400, "Cannot deliver redemption")
     return red
+
+@router.get("/families/{family_id}/rewards", response_model=list[RewardOut])
+def list_family_rewards(
+    family_id: str,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user)
+):
+    member = ensure_member(db, user_id=current.id, family_id=family_id)
+    if not member:
+        raise HTTPException(403, "You are not a member of this family")
+
+    rewards = db.query(Reward).filter(Reward.family_id == family_id).all()
+    return rewards

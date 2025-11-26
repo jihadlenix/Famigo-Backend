@@ -15,5 +15,6 @@ app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(families.router, prefix="/families", tags=["Families"])
 app.include_router(tasks.router, prefix="/tasks", tags=["Tasks"])
-app.include_router(rewards.router, prefix="/rewards", tags=["Rewards"])
+# app.include_router(rewards.router, prefix="/rewards", tags=["Rewards"])
+app.include_router(rewards.router, tags=["Rewards"])
 

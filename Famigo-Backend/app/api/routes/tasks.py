@@ -100,17 +100,17 @@ def assign(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    # 1) Load task
+    # 1) Load the task
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
 
-    # 2) Load family
+    # 2) Load the family
     family = db.get(Family, task.family_id)
     if not family:
         raise HTTPException(404, "Family not found")
 
-    # 3) Determine caller (must be a member or family owner)
+    # 3) Determine who is calling the endpoint
     caller_member = db.execute(
         select(FamilyMember).where(
             FamilyMember.user_id == current.id,
@@ -133,7 +133,7 @@ def assign(
     if not user:
         raise HTTPException(404, "No user found with that username")
 
-    # Find the family member record for that user
+    # 5) Find the family member record for that user
     assignee = db.execute(
         select(FamilyMember).where(
             FamilyMember.user_id == user.id,
@@ -142,26 +142,25 @@ def assign(
     ).scalar_one_or_none()
 
     if not assignee:
-        raise HTTPException(404, "User is not a member of this family")
+        raise HTTPException(404, "This user is not a member of this family")
 
-    # 5) Permissions
+    # 6) Permission logic
     is_self_assign = caller_member and (caller_member.id == assignee.id)
 
     if not is_owner:
         if not caller_member:
             raise HTTPException(403, "No family membership found")
+
         if not (is_self_assign or caller_member.role == MemberRole.PARENT):
             raise HTTPException(403, "Only parents or the owner can assign tasks")
 
-    # 6) Perform assignment
+    # 7) Perform assignment
     try:
         a = assign_task(db, task_id=task_id, assignee_id=assignee.id)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
     return {"assignment_id": a.id}
-
-
 # ------------------------------------------------------------------------
 # Complete a task
 # ------------------------------------------------------------------------
@@ -331,6 +330,29 @@ def family_tasks(
     if not member:
         raise HTTPException(403, "You are not a member of this family")
     return list_tasks_for_family(db, family_id=family_id)
+@router.get(
+    "/me/points",
+    response_model=dict,
+    summary="Get My Total Points",
+    description="Returns the total wallet balance of the current user across all families.",
+)
+def my_points(
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+):
+    # Find all families where the user is a member
+    members = db.execute(
+        select(FamilyMember).where(FamilyMember.user_id == current.id)
+    ).scalars().all()
+
+    total = 0
+
+    for m in members:
+        if m.wallet:
+            total += m.wallet.balance
+
+    return {"total_points": total}
+
 @router.get(
     "/me/points",
     response_model=dict,
