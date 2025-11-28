@@ -14,8 +14,6 @@ engine = create_engine(
     future=True,
     connect_args=connect_args
 )
-with engine.connect() as conn:
-    print("✅ Connection OK")
 # Session factory
 SessionLocal = sessionmaker(
     bind=engine,

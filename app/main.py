@@ -1,14 +1,20 @@
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from app.db.base import Base
 from app.db.session import engine
 from app.api.routes import auth, users, families, tasks, rewards
-
+import os
 
 app = FastAPI(title="Famigo API", version="0.2.0")
 
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
+    # Create uploads directory if it doesn't exist
+    os.makedirs("static/uploads", exist_ok=True)
+
+# Mount static files to serve uploaded images
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(users.router, prefix="/users", tags=["Users"])

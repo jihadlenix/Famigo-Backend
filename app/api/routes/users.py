@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Depends, Form, UploadFile, File
+from fastapi import APIRouter, Depends, Form, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session, joinedload
-
+import os
+import uuid
+from pathlib import Path
 from typing import List
 
 from ...schemas.user import UserOut, UserUpdate, MeOut
@@ -59,6 +61,43 @@ def update_me(
     if getattr(payload, "bio", None) is not None:
         current.bio = payload.bio
 
+    db.commit()
+    db.refresh(current)
+    return _build_me_out(db, current)
+
+
+# ✅ Upload profile picture
+@router.post("/me/profile-picture", response_model=MeOut)
+async def upload_profile_picture(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+):
+    # Validate file type
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "File must be an image")
+    
+    # Create uploads directory if it doesn't exist
+    upload_dir = Path("static/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique filename
+    file_ext = Path(file.filename).suffix if file.filename else ".jpg"
+    unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+    file_path = upload_dir / unique_filename
+    
+    # Save file
+    try:
+        contents = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(contents)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to save file: {str(e)}")
+    
+    # Update user profile_pic to relative path
+    relative_path = f"uploads/{unique_filename}"
+    current.profile_pic = relative_path
+    
     db.commit()
     db.refresh(current)
     return _build_me_out(db, current)

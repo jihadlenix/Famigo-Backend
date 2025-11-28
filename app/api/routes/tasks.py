@@ -109,14 +109,13 @@ def assign(
     if not assignee or assignee.family_id != family.id:
         raise HTTPException(404, "Assignee not found in this family")
 
-    is_self_assign = caller_member and caller_member.id == assignee.id
-
     if not is_owner:
         if not caller_member:
             raise HTTPException(403, "No family membership found")
 
-        if not (is_self_assign or caller_member.role == MemberRole.PARENT):
-            raise HTTPException(403, "Only parents, owner, or self-assign can assign tasks")
+        # Only parents can assign tasks, children cannot assign at all
+        if caller_member.role != MemberRole.PARENT:
+            raise HTTPException(403, "Only parents can assign tasks")
 
     try:
         a = assign_task(db, task_id=task_id, assignee_id=assignee.id)

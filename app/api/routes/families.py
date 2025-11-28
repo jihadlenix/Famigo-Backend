@@ -26,12 +26,49 @@ def my_families(db: Session = Depends(get_db), current: User = Depends(get_curre
 
 @router.get("/{family_id}", response_model=FamilyOut)
 def get_one(family_id: str, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
-    fam = get_family(db, family_id)
+    from sqlalchemy.orm import joinedload
+    fam = db.query(Family).options(
+        joinedload(Family.members).joinedload(FamilyMember.wallet),
+        joinedload(Family.members).joinedload(FamilyMember.user)
+    ).filter(Family.id == family_id).first()
     if not fam: 
         raise HTTPException(404, "Family not found")
     if not ensure_member(db, user_id=current.id, family_id=fam.id):
         raise HTTPException(403, "Not a member of this family")
-    return fam
+    
+    # Build members with wallet balance, username, and profile_pic
+    members_out = []
+    for member in fam.members:
+        wallet_balance = member.wallet.balance if member.wallet else 0
+        # Get user info for username, profile_pic, full_name, and email (loaded via joinedload)
+        user = member.user
+        username = user.username if user else None
+        profile_pic = user.profile_pic if user else None
+        full_name = user.full_name if user else None
+        email = user.email if user else None
+        
+        member_dict = {
+            "id": member.id,
+            "family_id": member.family_id,
+            "user_id": member.user_id,
+            "role": member.role.value,
+            "display_name": member.display_name,
+            "avatar_url": member.avatar_url,
+            "wallet_balance": wallet_balance,
+            "username": username,
+            "profile_pic": profile_pic,
+            "full_name": full_name,
+            "email": email,
+        }
+        members_out.append(MemberOut(**member_dict))
+    
+    return FamilyOut(
+        id=fam.id,
+        name=fam.name,
+        secret_code=fam.secret_code,
+        owner_id=fam.owner_id,
+        members=members_out
+    )
 
 @router.post("/{family_id}/invite", response_model=InviteOut)
 def make_invite(family_id: str, payload: InviteCreate, db: Session = Depends(get_db), current: User = Depends(get_current_user)):

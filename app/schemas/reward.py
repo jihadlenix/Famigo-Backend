@@ -12,6 +12,7 @@ class RewardOut(ORMModel):
     description: str | None = None
     cost_points: int
     is_active: bool
+    is_redeemed: bool = False  # Whether current user has redeemed this reward
 class RedemptionOut(ORMModel):
     id: str
     reward_id: str
@@ -21,3 +22,4 @@ class RedemptionOut(ORMModel):
     created_at: datetime
     updated_at: datetime
     redeemed_at: datetime | None
+    reward_title: str | None = None  # Reward title for display
